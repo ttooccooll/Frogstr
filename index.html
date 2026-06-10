@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>FROGSTR</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+  // Load lightning address from env - will be replaced at build time
+  window.LIGHTNING_ADDRESS = 'jasonbohio@blink.sv';
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  :root{--green:#0f0;--dark:#000;--glow:rgba(0,255,0,.4)}
+  html,body{background:#0a0a0a;margin:0;padding:0;overflow-x:hidden}
+  body{color:var(--green);font-family:'Press Start 2P','Courier New',monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:10px;box-sizing:border-box}
+  #crt{position:relative;width:min(calc(100vw - 20px),720px)}
+  #crt::before{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:repeating-linear-gradient(0deg,rgba(0,0,0,.15) 0px,rgba(0,0,0,.15) 1px,transparent 1px,transparent 3px);pointer-events:none;z-index:10;border-radius:8px}
+  #crt::after{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:radial-gradient(ellipse at center,transparent 60%,rgba(0,0,0,.45) 100%);pointer-events:none;z-index:11;border-radius:8px}
+  canvas{border:4px solid var(--green);border-radius:8px;width:100%;height:auto;touch-action:none;box-shadow:0 0 30px var(--glow),inset 0 0 30px rgba(0,255,0,.05);image-rendering:pixelated}
+  @keyframes flicker{0%,95%{opacity:1}96%{opacity:.8}97%{opacity:1}98%{opacity:.9}100%{opacity:1}}
+  .coin{display:inline-block;animation:spin 2s linear infinite;font-size:22px}
+  @keyframes spin{0%{transform:rotateY(0)}100%{transform:rotateY(360deg)}}
+</style>
+</head>
+<body>
+<div id="donateModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);z-index:100;align-items:center;justify-content:center;flex-direction:column;">
+  <div style="background:#000;border:3px solid #0f0;padding:20px;border-radius:8px;text-align:center;">
+    <h2 style="color:#0f0;font-size:18px;margin:0 0 15px;">⚡ ZAP ME</h2>
+    <div id="qrCode"></div>
+    <p id="donateStatus" style="color:#888;font-size:10px;margin:10px 0 0;"></p>
+    <button id="closeDonate" style="background:#000;color:#0f0;border:2px solid #0f0;padding:10px 20px;font-family:'Press Start 2P',monospace;font-size:11px;cursor:pointer;margin-top:15px;">CLOSE</button>
+  </div>
+</div>
+<div id="crt">
+  <canvas id="c" width="700" height="840"></canvas>
+</div>
+
+<script>
+"use strict";
+const CELL=50, ROWS=13, W=700, GH=ROWS*CELL, HUD_H=190;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+
+function rr(x,y,w,h,r){
+  r=Math.min(r,h/2,w/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+// ---------------- NOSTR RELAY CONNECTIONS ----------------
+const RELAYS=[
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://relay.nostr.band',
+  'wss://relay.snort.social',
+  'wss://relay.current.fyi',
+  'wss://nostr.wine',
+  'wss://eden.nostr.land',
+  'wss://relay.nostr.bg',
+  'wss://nostr.fmt.wiz.biz',
+  'wss://relay.orangepill.dev',
+  'wss://nostr-pub.wellorder.net',
+  'wss://offchain.pub',
+  'wss://purplepag.es'
+];
+const PUBLISH_RELAYS=[
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://relay.nostr.band',
+  'wss://relay.snort.social',
+  'wss://offchain.pub'
+];
+const vehiclePool=[], logPool=[], seen=new Set();
+let vi=0, li=0;
+
+// GM/GN notes = logs (safe to ride)
+const reGM=/(^|\s)(gm|gn)(\s|[!.,~]|$)|good\s*morning|good\s*night/i;
+// Bitcoin AND Nostr notes = vehicles (dangerous cars)
+const reVehicle=/\b(bitcoin|btc|sats?|nostr|zap(s|ped|ping)?|lightning|hodl|stack(ing)?\s*sats|relay|npub|nip[\s-]?\d|client|primal|damus|amethyst|snort|coracle)\b/i;
+
+function clean(s){
+  return s
+    .replace(/nostr:[a-z0-9]+/gi,' ')
+    .replace(/\b(npub|nsec|note|nevent|nprofile|naddr|lnbc|lnurl)1[a-z0-9]+/gi,' ')
+    .replace(/https?:\/\/\S+/gi,' ')
+    .replace(/\bwss?:\/\/\S+/gi,' ')
+    .replace(/\b[0-9a-f]{16,}\b/gi,' ')
+    .replace(/\b[A-Za-z0-9+/=_-]{25,}\b/g,' ')
+    .replace(/#\[\d+\]/g,' ')
+    .replace(/\s+/g,' ').trim();
+}
+function addNote(ev){
+  if(seen.has(ev.id))return; seen.add(ev.id);
+  const txt=clean(ev.content);
+  if(txt.length<4||txt.length>280)return;
+  if(!/[a-zA-Z]{2}/.test(txt))return;
+  const note={text:txt, pubkey:ev.pubkey, id:ev.id, ts:ev.created_at};
+  // GM/GN takes priority (logs)
+  if(reGM.test(txt)) logPool.push(note);
+  // Bitcoin + Nostr keywords = cars
+  else if(reVehicle.test(txt)) vehiclePool.push(note);
+}
+
+let connectedRelays=0;
+RELAYS.forEach(url=>{
+  try{
+    const ws=new WebSocket(url);
+    ws.onopen=()=>{
+      connectedRelays++;
+      ws.send(JSON.stringify(["REQ","main",{kinds:[1],limit:400}]));
+      // Bitcoin + nostr hashtag targets
+      ws.send(JSON.stringify(["REQ","btc",{kinds:[1],"#t":["bitcoin","btc","nostr","lightning","zap","plebchain"],limit:200}]));
+      // Nostr-specific hashtags
+      ws.send(JSON.stringify(["REQ","nstr",{kinds:[1],"#t":["nostr","damus","primal","amethyst","relay","nip"],limit:200}]));
+      // GM/GN hashtags
+      ws.send(JSON.stringify(["REQ","gm",{kinds:[1],"#t":["gm","gn","goodmorning","goodnight"],limit:200}]));
+      // nostr.band search support
+      if(url.includes('nostr.band')){
+        ws.send(JSON.stringify(["REQ","sb",{kinds:[1],search:"bitcoin",limit:200}]));
+        ws.send(JSON.stringify(["REQ","sn",{kinds:[1],search:"nostr",limit:200}]));
+        ws.send(JSON.stringify(["REQ","sg",{kinds:[1],search:"gm",limit:200}]));
+        ws.send(JSON.stringify(["REQ","sz",{kinds:[1],search:"zap lightning",limit:150}]));
+      }
+    };
+    ws.onmessage=m=>{
+      try{const d=JSON.parse(m.data);
+        if(d[0]==="EVENT"&&d[2]&&d[2].kind===1) addNote(d[2]);
+      }catch(e){}
+    };
+    ws.onerror=()=>{};
+  }catch(e){}
+});
+const FALLBACK_V=[{text:"waiting for nostr notes...",pubkey:"",ts:0}];
+const FALLBACK_L=[{text:"waiting for GM notes...",pubkey:"",ts:0}];
+const getVehicleNote=()=>vehiclePool.length?vehiclePool[vi++%vehiclePool.length]:FALLBACK_V[0];
+const getLogNote=()=>logPool.length?logPool[li++%logPool.length]:FALLBACK_L[0];
+
+// ---------------- NOSTR AUTH (NIP-07) ----------------
+let loggedInPubkey=null;
+let loggedInNpub=null;
+let publishSockets=[];
+
+// Simple bech32 encoder for npub
+function toBech32(prefix,hex){
+  const CHARSET='qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+  function polymod(values){let c=1;for(const v of values){const c0=c>>>25;c=((c&0x1ffffff)<<5)^v;for(let i=0;i<5;i++)if((c0>>>i)&1)c^=[0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3][i];}return c;}
+  function hrpExpand(hrp){const r=[];for(const c of hrp)r.push(c.charCodeAt(0)>>5);r.push(0);for(const c of hrp)r.push(c.charCodeAt(0)&31);return r;}
+  function createChecksum(hrp,data){const values=[...hrpExpand(hrp),...data,0,0,0,0,0,0];const pm=polymod(values)^1;const ret=[];for(let i=0;i<6;i++)ret.push((pm>>>(5*(5-i)))&31);return ret;}
+  function convertBits(data,fromBits,toBits,pad){let acc=0,bits=0;const ret=[];const maxv=(1<<toBits)-1;for(const v of data){acc=(acc<<fromBits)|v;bits+=fromBits;while(bits>=toBits){bits-=toBits;ret.push((acc>>>bits)&maxv);}}if(pad){if(bits>0)ret.push((acc<<(toBits-bits))&maxv);}return ret;}
+  const bytes=[];for(let i=0;i<hex.length;i+=2)bytes.push(parseInt(hex.substr(i,2),16));
+  const words=convertBits(bytes,8,5,true);
+  const checksum=createChecksum(prefix,words);
+  return prefix+'1'+[...words,...checksum].map(d=>CHARSET[d]).join('');
+}
+
+// Publish note to relays
+function openPublishRelays(){
+  if(publishSockets.length)return publishSockets;
+  PUBLISH_RELAYS.forEach(url=>{
+    try{
+      const ws=new WebSocket(url);
+      ws.onopen=()=>{ws.ready=true;};
+      ws.onerror=()=>{};
+      publishSockets.push(ws);
+    }catch(e){}
+  });
+  return publishSockets;
+}
+
+async function shareScoreNote(finalScore){
+  if(!loggedInPubkey||!window.nostr)return false;
+  const event={
+    kind:1,
+    created_at:Math.floor(Date.now()/1000),
+    tags:[["t","frogstr"],["t","nostr"],["t","gaming"]],
+    content:`I scored ${finalScore} on FROGSTR!\n\nDodge nostr & bitcoin notes, ride GM/GN logs across the river.\n\n#frogstr #nostr #gaming`,
+    pubkey:loggedInPubkey
+  };
+  try{
+    const signed=await window.nostr.signEvent(event);
+    const sockets=openPublishRelays();
+    sockets.forEach(ws=>{
+      if(ws.readyState===1) ws.send(JSON.stringify(["EVENT",signed]));
+    });
+    return true;
+  }catch(e){ return false; }
+}
+
+// ---------------- GAME ----------------
+const lanes=[
+ {row:1,log:true, v:  50},
+ {row:2,log:true, v: -38},
+ {row:3,log:true, v:  63},
+ {row:4,log:true, v: -45},
+ {row:5,log:true, v:  44},
+ {row:7,log:false,v: -68, color:'#ff2d6f'},
+ {row:8,log:false,v:  85, color:'#ffb000'},
+ {row:9,log:false,v: -54, color:'#00cfff'},
+ {row:10,log:false,v: 103,color:'#b14cff'},
+ {row:11,log:false,v: -77,color:'#ff5e3a'},
+];
+lanes.forEach(l=>l.ents=[]);
+let frog,lives,score,dead,deadTimer,hudNote,hudDeath,started,homes,gameOver;
+let gameOverHandled=false;
+const homeX=[1,4,6.5,9,12];
+function newGame(){
+  frog={x:6.5*CELL,y:12*CELL};
+  lives=3; score=0; dead=0; deadTimer=0; hudNote=null; hudDeath=false;
+  homes=[false,false,false,false,false]; gameOver=false; gameOverHandled=false;
+}
+newGame(); started=false;
+
+function spawn(lane){
+  const note=lane.log?getLogNote():getVehicleNote();
+  const w=Math.max(lane.log?180:130, Math.min(lane.log?330:280, note.text.length*7));
+  lane.ents.push({x:lane.v>0?-w-10:W+10, w, note, off:Math.random()*500});
+}
+function ready(lane){
+  if(!lane.ents.length)return true;
+  const last=lane.ents[lane.ents.length-1], gap=155+Math.random()*150;
+  return lane.v>0 ? (last.x > -10+gap) : (last.x+last.w < W+10-gap);
+}
+function resetFrog(){ frog.x=6.5*CELL; frog.y=12*CELL; }
+function die(note){
+  lives--; dead=1; deadTimer=1.0;
+  if(note){hudNote=note; hudDeath=true;}
+  if(lives<=0)gameOver=true;
+}
+function move(dir){
+  if(gameOver&&!gameOverHandled)return;
+  if(gameOver&&gameOverHandled){ newGame(); started=true; return; }
+  if(!started){ started=true; return; }
+  if(dead)return;
+  if(dir==='up')frog.y-=CELL;
+  else if(dir==='down')frog.y=Math.min(12*CELL,frog.y+CELL);
+  else if(dir==='left')frog.x-=CELL;
+  else if(dir==='right')frog.x+=CELL;
+  frog.x=Math.max(0,Math.min(W-CELL,frog.x));
+  frog.y=Math.max(0,frog.y);
+}
+document.addEventListener('keydown',e=>{
+  const map={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',w:'up',s:'down',a:'left',d:'right'};
+  if(map[e.key]){ move(map[e.key]); e.preventDefault(); }
+  if(gameOver&&gameOverHandled){ newGame(); started=true; e.preventDefault(); }
+});
+let tsx=0,tsy=0;
+cv.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];tsx=t.clientX;tsy=t.clientY;},{passive:false});
+cv.addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(gameOver&&gameOverHandled){ newGame(); started=true; return; }
+  const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
+  if(Math.abs(dx)<18&&Math.abs(dy)<18){ move('up'); return; }
+  if(Math.abs(dx)>Math.abs(dy)) move(dx>0?'right':'left');
+  else move(dy>0?'down':'up');
+},{passive:false});
+
+// Game over handling
+let showShareBtn=false, showPlayAgainBtn=false;
+let shareClicked=false;
+
+function handleGameOver(){
+  if(gameOverHandled)return;
+  gameOverHandled=true;
+  showShareBtn=!!loggedInPubkey&&score>0;
+  showPlayAgainBtn=true;
+  shareClicked=false;
+}
+
+// Canvas click detection for game over buttons and donate
+cv.addEventListener('click',e=>{
+  const rect=cv.getBoundingClientRect();
+  const scaleX=W/rect.width;
+  const scaleY=(GH+HUD_H)/rect.height;
+  const cx=(e.clientX-rect.left)*scaleX;
+  const cy=(e.clientY-rect.top)*scaleY;
+  
+  // Donate button click
+  const dbX=W/2-60, dbY=GH+150, dbW=120, dbH=28;
+  if(cx>=dbX&&cx<=dbX+dbW&&cy>=dbY&&cy<=dbY+dbH){
+    qrContainer.innerHTML='';
+    donateStatus.textContent='SCAN WITH YOUR LIGHTNING WALLET';
+    new QRCode(qrContainer,{text:`lightning:${LIGHTNING_ADDRESS}`,width:180,height:180,colorDark:'#0f0',colorLight:'#000'});
+    donateModal.style.display='flex';
+    return;
+  }
+  // stacker.news link click
+  if(cx>=W-105&&cx<=W-20&&cy>=GH+150&&cy<=GH+178){
+    window.open('https://stacker.news/jasonb','_blank');
+    return;
+  }
+  
+  if(!gameOver||!gameOverHandled)return;
+  
+  // Share button
+  if(showShareBtn&&!shareClicked){
+    const btnX=W/2-120, btnY=GH/2+50, btnW=240, btnH=34;
+    if(cx>=btnX&&cx<=btnX+btnW&&cy>=btnY&&cy<=btnY+btnH){
+      shareClicked=true;
+      shareScoreNote(score);
+      return;
+    }
+  }
+  // Play again button
+  const paY=showShareBtn?GH/2+96:GH/2+55;
+  const paX=W/2-100, paW=200, paH=34;
+  if(cx>=paX&&cx<=paX+paW&&cy>=paY&&cy<=paY+paH){
+    newGame(); started=true;
+  }
+});
+
+let lastT=performance.now();
+function loop(t){
+  const dt=Math.min(0.05,(t-lastT)/1000); lastT=t;
+  update(dt); draw(t);
+  requestAnimationFrame(loop);
+}
+function update(dt){
+  lanes.forEach(lane=>{
+    if(ready(lane))spawn(lane);
+    lane.ents.forEach(en=>en.x+=lane.v*dt);
+    lane.ents=lane.ents.filter(en=>en.x>-en.w-60&&en.x<W+60);
+  });
+  if(dead){ deadTimer-=dt; if(deadTimer<=0){dead=0; if(!gameOver)resetFrog(); else handleGameOver();} return; }
+  if(gameOver||!started)return;
+
+  const row=Math.round(frog.y/CELL);
+  const fx=frog.x+CELL*0.22, fw=CELL*0.56;
+  if(row>=7&&row<=11){
+    const lane=lanes.find(l=>l.row===row);
+    for(const en of lane.ents){
+      if(fx<en.x+en.w-4 && fx+fw>en.x+4){ die(en.note); return; }
+    }
+  } else if(row>=1&&row<=5){
+    const lane=lanes.find(l=>l.row===row);
+    let on=null;
+    const cx2=frog.x+CELL/2;
+    for(const en of lane.ents){
+      if(cx2>en.x-6 && cx2<en.x+en.w+6){ on=en; break; }
+    }
+    if(on){
+      frog.x+=lane.v*dt; hudNote=on.note; hudDeath=false;
+      if(frog.x<-CELL*0.6||frog.x>W-CELL*0.4){ die(on.note); return; }
+    } else { die(null); return; }
+  } else if(row===0){
+    let slot=-1;
+    for(let i=0;i<5;i++){ if(!homes[i]&&Math.abs(frog.x/CELL-homeX[i])<0.75)slot=i; }
+    if(slot>=0){
+      homes[slot]=true; score+=100;
+      if(homes.every(h=>h)){ score+=500; homes=[false,false,false,false,false]; }
+      resetFrog();
+    } else die(null);
+  }
+}
+
+const shortKey=pk=>pk?toBech32('npub',pk).slice(0,12)+'..':'--';
+const fmtTime=ts=>ts?new Date(ts*1000).toLocaleString():"";
+
+// Pixel-style text helper
+function pixelText(text,x,y,size,color,align){
+  const c=color||'#0f0';
+  ctx.fillStyle=c;
+  ctx.shadowColor=c;
+  ctx.shadowBlur=size<12?4:6;
+  ctx.font=`bold ${size||16}px "Press Start 2P","Courier New",monospace`;
+  ctx.textAlign=align||'left';
+  ctx.textBaseline='middle';
+  ctx.fillText(text,x,y);
+  ctx.shadowBlur=0;
+}
+
+function draw(t){
+  ctx.fillStyle='#0a0a0a'; ctx.fillRect(0,0,W,GH+HUD_H);
+  
+  // Water zone
+  ctx.fillStyle='#001030'; ctx.fillRect(0,CELL,W,5*CELL);
+  // Water grid lines (retro feel)
+  ctx.strokeStyle='rgba(0,100,200,0.12)'; ctx.lineWidth=1;
+  for(let r=1;r<=5;r++){
+    ctx.beginPath(); ctx.moveTo(0,r*CELL); ctx.lineTo(W,r*CELL); ctx.stroke();
+  }
+  // Animated water ripples
+  ctx.shadowColor='#0af'; ctx.shadowBlur=2;
+  ctx.strokeStyle='rgba(0,200,255,0.04)'; ctx.lineWidth=1;
+  for(let r=0;r<8;r++){
+    const ry=CELL+15+r*30+(Math.sin(t/500+r)*3);
+    ctx.beginPath();
+    for(let x=0;x<W;x+=8){
+      const yoff=Math.sin((x+t/200)+r*0.5)*4;
+      ctx.lineTo(x,ry+yoff);
+    }
+    ctx.stroke();
+  }
+  ctx.shadowBlur=0;
+  // Animated water dots
+  ctx.fillStyle='rgba(80,140,255,0.2)';
+  for(let i=0;i<20;i++){
+    const sy=CELL+12+((i*41)%(5*CELL-24));
+    const sx=((t/25)+i*89)%(W+40)-20;
+    ctx.fillRect(Math.floor(sx),Math.floor(sy),3,2);
+  }
+  
+  // Road zone
+  ctx.fillStyle='#111'; ctx.fillRect(0,7*CELL,W,5*CELL);
+  // Road lane dashes
+  ctx.shadowColor='#caca20'; ctx.shadowBlur=4;
+  ctx.fillStyle='#caca20';
+  for(let r=8;r<=11;r++){
+    for(let dx=0;dx<W;dx+=36){
+      ctx.fillRect(dx,r*CELL-1,16,2);
+    }
+  }
+  ctx.shadowBlur=0;
+  
+  // Home strip
+  ctx.fillStyle='#1a0a40'; ctx.fillRect(0,0,W,CELL);
+  // Pixel border on home
+  ctx.strokeStyle='#6030c0'; ctx.lineWidth=2;
+  ctx.strokeRect(0,0,W,CELL);
+  
+  // Grass bands (pixel style)
+  drawGrass(6*CELL); drawGrass(12*CELL);
+  
+  // Home pads
+  for(let i=0;i<5;i++){
+    const cx2=homeX[i]*CELL+5, cy2=CELL/2;
+    ctx.fillStyle=homes[i]?'#2fbf4f':'#1a5a2a';
+    ctx.shadowColor='#0f0'; ctx.shadowBlur=5;
+    ctx.fillRect(cx2-16,cy2-14,32,28);
+    ctx.strokeStyle=homes[i]?'#7fe89a':'#2a7a3a'; ctx.lineWidth=2;
+    ctx.strokeRect(cx2-16,cy2-14,32,28);
+    ctx.shadowBlur=0;
+    if(homes[i]) drawFrog(cx2-12,cy2-12,0.5);
+  }
+  
+  // --- entities ---
+  ctx.font='14px "Courier New",monospace'; ctx.textBaseline='middle';
+  lanes.forEach(lane=>{
+    const y=lane.row*CELL+6, h=CELL-12;
+    lane.ents.forEach(en=>{
+      if(lane.log){
+        // Pixel log
+        ctx.fillStyle='#6e4419'; ctx.fillRect(en.x,y,en.w,h);
+        ctx.fillStyle='#8a5a26'; ctx.fillRect(en.x+2,y+2,en.w-4,h-4);
+        ctx.strokeStyle='#3c2208'; ctx.lineWidth=2;
+        ctx.strokeRect(en.x,y,en.w,h);
+        // Log end caps
+        ctx.fillStyle='#542f10';
+        ctx.fillRect(en.x,y,6,h);
+        ctx.fillRect(en.x+en.w-6,y,6,h);
+        ctx.fillStyle='#ffe9c4';
+      } else {
+        // Pixel car
+        ctx.fillStyle='#111'; ctx.fillRect(en.x,y,en.w,h);
+        ctx.strokeStyle=lane.color; ctx.lineWidth=2;
+        ctx.strokeRect(en.x,y,en.w,h);
+        // Roof stripe
+        ctx.fillStyle=lane.color; ctx.globalAlpha=0.35;
+        ctx.fillRect(en.x+6,y+2,en.w-12,4);
+        ctx.globalAlpha=1;
+        // Headlights & taillights (blocky)
+        const front=lane.v>0?en.x+en.w-5:en.x+1;
+        const back =lane.v>0?en.x+1:en.x+en.w-5;
+        ctx.fillStyle='#ffff80'; ctx.fillRect(front,y+4,4,5); ctx.fillRect(front,y+h-9,4,5);
+        ctx.fillStyle='#ff2020'; ctx.fillRect(back,y+4,4,5); ctx.fillRect(back,y+h-9,4,5);
+        ctx.fillStyle=lane.color;
+      }
+      // Scrolling note text
+      ctx.save();
+      ctx.beginPath(); ctx.rect(en.x+8,y+2,en.w-16,h-4); ctx.clip();
+      ctx.font='9px "Press Start 2P","Courier New",monospace';
+ctx.fillStyle='#c8c8c8';
+      ctx.shadowColor='#000';
+      ctx.shadowBlur=2;
+      const txt=en.note.text, tw=ctx.measureText(txt).width;
+      let tx=en.x+10;
+      if(tw>en.w-20){ tx=en.x+10-((t/35+en.off)%(tw+60)); ctx.fillText(txt,tx+tw+60,y+h/2); }
+      ctx.fillText(txt,tx,y+h/2);
+      ctx.restore();
+    });
+  });
+  
+  // --- frog ---
+  if(!gameOver&&!dead) drawFrog(frog.x+8,frog.y+8,0.7);
+  if(dead&&!gameOver){
+    // Death X marker (pixel style)
+    ctx.shadowColor='#f00'; ctx.shadowBlur=25;
+    ctx.fillStyle='#ff0000';
+    ctx.font='bold 28px "Press Start 2P",monospace'; ctx.textBaseline='middle'; ctx.textAlign='center';
+    ctx.fillText('X',frog.x+CELL/2,frog.y+CELL/2);
+    ctx.shadowBlur=0;
+    ctx.textAlign='left';
+  }
+  
+  // --- HUD ---
+  ctx.textBaseline='middle';
+  const hudY=GH;
+  ctx.fillStyle='#050505'; ctx.fillRect(0,hudY,W,HUD_H);
+  ctx.strokeStyle='#0f0'; ctx.lineWidth=2; ctx.strokeRect(1,hudY+1,W-2,HUD_H-2);
+  
+// Title in HUD
+  ctx.shadowColor='#0f0'; ctx.shadowBlur=10;
+  pixelText('FROGSTR',W/2,hudY+25,18,'#0f0','center');
+  ctx.shadowBlur=0;
+  
+  // Score & lives
+  pixelText(`SCORE:`,14,hudY+60,11,'#0f0');
+  pixelText(`${score}`,80,hudY+60,14,'#ffd700');
+  // Lives as pixel hearts
+  pixelText(`LIVES:`,130,hudY+60,11,'#0f0');
+  ctx.shadowColor='#f36'; ctx.shadowBlur=3;
+  ctx.fillStyle='#ff3366';
+  for(let i=0;i<Math.max(0,lives);i++){
+    const hx=200+i*22;
+    ctx.fillRect(hx,hudY+54,5,5); ctx.fillRect(hx+7,hudY+54,5,5);
+    ctx.fillRect(hx-1,hudY+58,14,5); ctx.fillRect(hx+2,hudY+63,10,4); ctx.fillRect(hx+3,hudY+67,7,2);
+  }
+  ctx.shadowBlur=0;
+  
+  // Note counts
+  pixelText(`${vehiclePool.length}`,280,hudY+60,10,'#ff5555');
+  pixelText('BTC/NOSTR',320,hudY+60,9,'#888');
+  pixelText(`${logPool.length}`,420,hudY+60,10,'#55ff55');
+  pixelText('GM/GN',460,hudY+60,9,'#888');
+  
+  // Relay count
+  pixelText(`${connectedRelays}/${RELAYS.length}`,560,hudY+60,10,'#0f0');
+  pixelText('RELAYS',598,hudY+60,9,'#555');
+
+  // Donate button in HUD
+  const btnX=W/2-60, btnY=hudY+150, btnW=120, btnH=28;
+  ctx.fillStyle='#000'; ctx.fillRect(btnX,btnY,btnW,btnH);
+  pixelText('Buy me a coffee!',W/2,btnY+14,10,'#0f0','center');
+  // stacker.news link
+  pixelText('by jasonb',W-20,btnY+14,8,'#ffd700','right');
+
+  // Note info
+  if(hudNote){
+    ctx.fillStyle=hudDeath?'#ff3333':'#ffd98a';
+    ctx.font='10px "Press Start 2P","Courier New",monospace'; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText((hudDeath?'SPLATTED BY: ':'RIDING: ')+shortKey(hudNote.pubkey),14,hudY+95);
+    const words=hudNote.text.split(' '); let line='', yy=hudY+115;
+    ctx.fillStyle='#aaa'; ctx.font='10px "Press Start 2P","Courier New",monospace';
+    for(const w2 of words){
+      if(ctx.measureText(line+w2).width>W-30){ ctx.fillText(line,14,yy); yy+=14; line=''; if(yy>hudY+HUD_H-12)break; }
+      line+=w2+' ';
+    }
+    if(yy<=hudY+HUD_H-12)ctx.fillText(line,14,yy);
+  }
+  
+  // --- overlays ---
+  if(!started){
+    overlay();
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    // Title with glow
+    ctx.shadowColor='#0f0'; ctx.shadowBlur=20;
+    pixelText('FROGSTR',W/2,GH/2-100,24,'#0f0','center');
+    ctx.shadowBlur=0;
+    pixelText('A NOSTR-POWERED FROGGER',W/2,GH/2-60,9,'#888','center');
+    
+    ctx.fillStyle='#0f0'; ctx.font='12px "Press Start 2P",monospace';
+    ctx.fillText('DODGE BTC & NOSTR NOTES',W/2,GH/2-20);
+    ctx.fillText('RIDE GM/GN LOGS',W/2,GH/2+8);
+    
+    ctx.fillStyle='#aaa'; ctx.font='11px "Press Start 2P",monospace';
+    ctx.fillText('ARROWS / WASD / SWIPE',W/2,GH/2+45);
+    
+    ctx.fillStyle='#ffd700'; ctx.font='10px "Press Start 2P",monospace';
+    
+    ctx.fillStyle='#555'; ctx.font='10px "Press Start 2P",monospace';
+    ctx.fillText(`${vehiclePool.length+logPool.length} NOTES FROM ${connectedRelays} RELAYS`,W/2,GH/2+100);
+    
+    // Blinking "INSERT COIN"
+    if(Math.floor(t/600)%2===0){
+      ctx.fillStyle='#0f0'; ctx.font='14px "Press Start 2P",monospace';
+      ctx.fillText('PRESS A KEY TO START',W/2,GH/2+135);
+    }
+    ctx.textAlign='left';
+  }
+  if(gameOver&&gameOverHandled){
+    overlay();
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    
+    // Glitchy GAME OVER
+    ctx.shadowColor='#f00'; ctx.shadowBlur=15;
+    pixelText('GAME OVER',W/2,GH/2-45,22,'#ff2222','center');
+    ctx.shadowBlur=0;
+    
+    pixelText(`SCORE: ${score}`,W/2,GH/2,15,'#ffd700','center');
+    
+    // Share button
+    if(showShareBtn){
+      const btnX=W/2-130, btnY=GH/2+40, btnW=260, btnH=38;
+      ctx.fillStyle=shareClicked?'#0a1a0a':'#000';
+      ctx.fillRect(btnX,btnY,btnW,btnH);
+      ctx.strokeStyle=shareClicked?'#333':'#0f0'; ctx.lineWidth=2;
+      ctx.strokeRect(btnX,btnY,btnW,btnH);
+      pixelText(shareClicked?'SHARED!':'SHARE ON NOSTR',W/2,btnY+19,11,shareClicked?'#555':'#0f0','center');
+    }
+    
+    // Play again
+    const paY=showShareBtn?GH/2+90:GH/2+50;
+    ctx.fillStyle='#000'; ctx.fillRect(W/2-110,paY,220,38);
+    ctx.strokeStyle='#0f0'; ctx.lineWidth=2; ctx.strokeRect(W/2-110,paY,220,38);
+    pixelText('PLAY AGAIN',W/2,paY+19,11,'#0f0','center');
+    
+    ctx.textAlign='left';
+  }
+}
+function overlay(){
+  ctx.fillStyle='rgba(0,0,0,0.88)'; ctx.fillRect(0,0,W,GH);
+  // Scanline overlay on game area
+  ctx.fillStyle='rgba(0,255,0,0.015)';
+  for(let sy=0;sy<GH;sy+=4) ctx.fillRect(0,sy,W,2);
+}
+function drawGrass(y){
+  ctx.fillStyle='#0a2a0a'; ctx.fillRect(0,y,W,CELL);
+  ctx.strokeStyle='#1a4a1a'; ctx.lineWidth=1;
+  ctx.strokeRect(0,y,W,CELL);
+  // Pixel grass blades with glow
+  ctx.shadowColor='#0f0'; ctx.shadowBlur=4;
+  ctx.fillStyle='#2a6a2a';
+  for(let i=0;i<40;i++){
+    const gx=(i*83+17)%W, gy=y+6+((i*47)%(CELL-12));
+    ctx.fillRect(gx,gy,2,5);
+  }
+  ctx.shadowBlur=0;
+}
+function drawFrog(x,y,s){
+  // Blocky pixel frog
+  const sz=Math.floor(36*s);
+  const px=Math.floor(sz/8); // pixel unit
+  
+  ctx.shadowColor='#0f0'; ctx.shadowBlur=4;
+  // Body
+  ctx.fillStyle='#1bb31b';
+  ctx.fillRect(x+px*2,y+px,px*4,px*6);
+  // Head wider
+  ctx.fillRect(x+px,y,px*6,px*3);
+  // Legs
+  ctx.fillRect(x,y+px*4,px*2,px*3);
+  ctx.fillRect(x+px*6,y+px*4,px*2,px*3);
+  // Front legs
+  ctx.fillRect(x,y+px,px*1,px*2);
+  ctx.fillRect(x+px*7,y+px,px*1,px*2);
+  
+  // Eyes
+  ctx.fillStyle='#fff';
+  ctx.fillRect(x+px*2,y,px*1,px*1);
+  ctx.fillRect(x+px*5,y,px*1,px*1);
+  ctx.fillStyle='#000';
+  ctx.fillRect(x+px*2,y,px,px);
+  ctx.fillRect(x+px*5,y,px,px);
+  
+  // Highlight
+  ctx.fillStyle='#4fe04f';
+  ctx.fillRect(x+px*3,y+px,px*2,px);
+  ctx.shadowBlur=0;
+}
+requestAnimationFrame(loop);
+
+// ---------------- DONATE FUNCTIONALITY ----------------
+const donateModal=document.getElementById('donateModal');
+const closeDonate=document.getElementById('closeDonate');
+const qrContainer=document.getElementById('qrCode');
+const donateStatus=document.getElementById('donateStatus');
+const LIGHTNING_ADDRESS='jasonbohio@blink.sv';
+
+closeDonate.addEventListener('click',()=>{
+  donateModal.style.display='none';
+});
+
+donateModal.addEventListener('click',(e)=>{
+  if(e.target===donateModal)donateModal.style.display='none';
+});
+
+cv.addEventListener('mousemove',e=>{
+  const rect=cv.getBoundingClientRect();
+  const scaleX=W/rect.width;
+  const scaleY=(GH+HUD_H)/rect.height;
+  const cx=(e.clientX-rect.left)*scaleX;
+  const cy=(e.clientY-rect.top)*scaleY;
+  const dbX=W/2-60, dbY=GH+150, dbW=120, dbH=28;
+  const paY=gameOver&&gameOverHandled?(showShareBtn?GH/2+96:GH/2+55):-100;
+  const paX=W/2-110, paW=220;
+  const stackerX=W-105, stackerW=85;
+  const hover=gameOver&&gameOverHandled;
+  cv.style.cursor=(cx>=dbX&&cx<=dbX+dbW&&cy>=dbY&&cy<=dbY+dbH||cx>=paX&&cx<=paX+paW&&cy>=paY&&cy<=paY+38||cx>=stackerX&&cx<=stackerX+stackerW&&cy>=dbY&&cy<=dbY+dbH)?'pointer':'default';
+});
+</script>
+</body>
+</html>
