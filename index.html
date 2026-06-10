@@ -264,16 +264,16 @@ cv.addEventListener('touchend',e=>{
   const scaleY=(GH+HUD_H)/rect.height;
   const cx=(e.changedTouches[0].clientX-rect.left)*scaleX;
   const cy=(e.changedTouches[0].clientY-rect.top)*scaleY;
+  const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
   
-  // Handle button taps in HUD area (bottom of canvas)
-  if(cy>=GH){
+  // Handle button taps - HUD area OR game over screen
+  if(cy>=GH || (gameOver && gameOverHandled)){
     handleButtonClick(cx,cy);
     return;
   }
   
   // Game movement swipes
   if(gameOver&&gameOverHandled){ newGame(); started=true; return; }
-  const t=e.changedTouches[0], dx=t.clientX-tsx, dy=t.clientY-tsy;
   if(Math.abs(dx)<18&&Math.abs(dy)<18){ move('up'); return; }
   if(Math.abs(dx)>Math.abs(dy)) move(dx>0?'right':'left');
   else move(dy>0?'down':'up');
