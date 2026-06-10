@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>FROGSTR</title>
+<link rel="icon" href="logo.jpeg" type="image/jpeg">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
   // Load lightning address from env - will be replaced at build time
@@ -145,6 +146,7 @@ const getLogNote=()=>logPool.length?logPool[li++%logPool.length]:FALLBACK_L[0];
 // ---------------- NOSTR AUTH (NIP-07) ----------------
 let loggedInPubkey=null;
 let loggedInNpub=null;
+let nostrLoginTried=false;
 let publishSockets=[];
 
 // Simple bech32 encoder for npub
@@ -268,9 +270,16 @@ let shareClicked=false;
 function handleGameOver(){
   if(gameOverHandled)return;
   gameOverHandled=true;
-  showShareBtn=!!loggedInPubkey&&score>0;
   showPlayAgainBtn=true;
   shareClicked=false;
+  // Try to get pubkey when game ends (not on page load)
+  if(!loggedInPubkey && window.nostr && !nostrLoginTried){
+    nostrLoginTried=true;
+    window.nostr.getPublicKey().then(pubkey=>{
+      loggedInPubkey=pubkey;
+    }).catch(e=>{});
+  }
+  showShareBtn=!!loggedInPubkey&&score>0;
 }
 
 // Canvas click detection for game over buttons and donate
