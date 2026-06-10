@@ -177,6 +177,7 @@ function openPublishRelays(){
 }
 
 async function shareScoreNote(finalScore){
+  console.log('shareScoreNote called, loggedInPubkey:', loggedInPubkey, 'window.nostr:', !!window.nostr);
   if(!loggedInPubkey||!window.nostr)return false;
   const event={
     kind:1,
@@ -185,14 +186,16 @@ async function shareScoreNote(finalScore){
     content:`🐸 I scored ${finalScore} on FROGSTR! 🐸\n\nDodge nostr & bitcoin notes, ride GM/GN logs across the river.\n\n#frogstr #nostr #gaming\n\nhttps://frogstr.nostrminusnostr.xyz`,
     pubkey:loggedInPubkey
   };
+  console.log('Signing event:', event);
   try{
     const signed=await window.nostr.signEvent(event);
+    console.log('Event signed:', signed);
     const sockets=openPublishRelays();
     sockets.forEach(ws=>{
       if(ws.readyState===1) ws.send(JSON.stringify(["EVENT",signed]));
     });
     return true;
-  }catch(e){ return false; }
+  }catch(e){ console.log('signEvent error:', e); return false; }
 }
 
 // ---------------- GAME ----------------
@@ -294,14 +297,16 @@ function handleButtonClick(cx,cy){
   
   if(!gameOver||!gameOverHandled)return;
   
-  // Share button
+// Share button
   if(showShareBtn&&!shareClicked){
-    const btnX=W/2-120, btnY=GH/2+50, btnW=240, btnH=34;
+    const btnX=W/2-130, btnY=GH/2+40, btnW=260, btnH=38;
     if(cx>=btnX&&cx<=btnX+btnW&&cy>=btnY&&cy<=btnY+btnH){
+      console.log('Share button clicked, calling shareScoreNote...');
       shareClicked=true;
       shareScoreNote(score);
       return;
     }
+  }
   }
   // Play again button
   const paY=showShareBtn?GH/2+96:GH/2+55;
