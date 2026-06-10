@@ -182,7 +182,7 @@ async function shareScoreNote(finalScore){
     kind:1,
     created_at:Math.floor(Date.now()/1000),
     tags:[["t","frogstr"],["t","nostr"],["t","gaming"]],
-    content:`I scored ${finalScore} on FROGSTR!\n\nDodge nostr & bitcoin notes, ride GM/GN logs across the river.\n\n#frogstr #nostr #gaming\n\nhttps://frogstr.nostrminusnostr.xyz`,
+    content:`🐸 I scored ${finalScore} on FROGSTR! 🐸\n\nDodge nostr & bitcoin notes, ride GM/GN logs across the river.\n\n#frogstr #nostr #gaming\n\nhttps://frogstr.nostrminusnostr.xyz`,
     pubkey:loggedInPubkey
   };
   try{
@@ -277,6 +277,7 @@ function handleGameOver(){
     nostrLoginTried=true;
     window.nostr.getPublicKey().then(pubkey=>{
       loggedInPubkey=pubkey;
+      showShareBtn=score>0;
     }).catch(e=>{});
   }
   showShareBtn=!!loggedInPubkey&&score>0;
