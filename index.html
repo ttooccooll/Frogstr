@@ -327,7 +327,7 @@ function handleGameOver(){
     window.nostr.getPublicKey().then(pubkey=>{
       console.log('Got pubkey:', pubkey);
       loggedInPubkey=pubkey;
-      showShareBtn=score>0;
+      showShareBtn=true;
       console.log('showShareBtn set to:', showShareBtn);
     }).catch(e=>{ console.log('getPublicKey error:', e); });
   }
