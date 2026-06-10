@@ -323,10 +323,13 @@ function handleGameOver(){
   // Try to get pubkey when game ends (not on page load)
   if(!loggedInPubkey && window.nostr && !nostrLoginTried){
     nostrLoginTried=true;
+    console.log('Attempting to get nostr pubkey...');
     window.nostr.getPublicKey().then(pubkey=>{
+      console.log('Got pubkey:', pubkey);
       loggedInPubkey=pubkey;
       showShareBtn=score>0;
-    }).catch(e=>{});
+      console.log('showShareBtn set to:', showShareBtn);
+    }).catch(e=>{ console.log('getPublicKey error:', e); });
   }
   showShareBtn=!!loggedInPubkey&&score>0;
 }
