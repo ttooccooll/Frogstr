@@ -102,8 +102,8 @@ function addNote(ev){
   if(txt.length<4||txt.length>280)return;
   if(!/[a-zA-Z]{2}/.test(txt))return;
   const note={text:txt, pubkey:ev.pubkey, id:ev.id, ts:ev.created_at};
-  // GM/GN takes priority (logs)
-  if(reGM.test(txt)) logPool.push(note);
+  // GM/GN takes priority (logs), but exclude bitcoin/nostr notes
+  if(reGM.test(txt) && !reVehicle.test(txt)) logPool.push(note);
   // Bitcoin + Nostr keywords = cars
   else if(reVehicle.test(txt)) vehiclePool.push(note);
 }
