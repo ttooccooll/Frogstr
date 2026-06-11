@@ -13,16 +13,6 @@ A nostr-powered Frogger arcade game. Dodge real-time bitcoin and nostr notes (th
 
 This is a single `index.html` file. No build step required. Just serve it or open it in a browser.
 
-### Lightning Address (Donate Button)
-
-The donate button uses a QR code with your lightning address. Open `index.html` and find this line:
-
-```javascript
-const LIGHTNING_ADDRESS = "jasonbohio@blink.sv";
-```
-
-Replace with your lightning address.
-
 ## Controls
 
 - **Desktop:** Arrow keys or WASD
