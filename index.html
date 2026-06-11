@@ -645,4 +645,88 @@ ctx.fillStyle='#c8c8c8';
     pixelText('PLAY AGAIN',W/2,paY+19,11,'#0f0','center');
     
     ctx.textAlign='left';
- 
+  }
+}
+function overlay(){
+  ctx.fillStyle='rgba(0,0,0,0.88)'; ctx.fillRect(0,0,W,GH);
+  // Scanline overlay on game area
+  ctx.fillStyle='rgba(0,255,0,0.015)';
+  for(let sy=0;sy<GH;sy+=4) ctx.fillRect(0,sy,W,2);
+}
+function drawGrass(y){
+  ctx.fillStyle='#0a2a0a'; ctx.fillRect(0,y,W,CELL);
+  ctx.strokeStyle='#1a4a1a'; ctx.lineWidth=1;
+  ctx.strokeRect(0,y,W,CELL);
+  // Pixel grass blades with glow
+  ctx.shadowColor='#0f0'; ctx.shadowBlur=4;
+  ctx.fillStyle='#2a6a2a';
+  for(let i=0;i<40;i++){
+    const gx=(i*83+17)%W, gy=y+6+((i*47)%(CELL-12));
+    ctx.fillRect(gx,gy,2,5);
+  }
+  ctx.shadowBlur=0;
+}
+function drawFrog(x,y,s){
+  // Blocky pixel frog
+  const sz=Math.floor(36*s);
+  const px=Math.floor(sz/8); // pixel unit
+  
+  ctx.shadowColor='#0f0'; ctx.shadowBlur=4;
+  // Body
+  ctx.fillStyle='#1bb31b';
+  ctx.fillRect(x+px*2,y+px,px*4,px*6);
+  // Head wider
+  ctx.fillRect(x+px,y,px*6,px*3);
+  // Legs
+  ctx.fillRect(x,y+px*4,px*2,px*3);
+  ctx.fillRect(x+px*6,y+px*4,px*2,px*3);
+  // Front legs
+  ctx.fillRect(x,y+px,px*1,px*2);
+  ctx.fillRect(x+px*7,y+px,px*1,px*2);
+  
+  // Eyes
+  ctx.fillStyle='#fff';
+  ctx.fillRect(x+px*2,y,px*1,px*1);
+  ctx.fillRect(x+px*5,y,px*1,px*1);
+  ctx.fillStyle='#000';
+  ctx.fillRect(x+px*2,y,px,px);
+  ctx.fillRect(x+px*5,y,px,px);
+  
+  // Highlight
+  ctx.fillStyle='#4fe04f';
+  ctx.fillRect(x+px*3,y+px,px*2,px);
+  ctx.shadowBlur=0;
+}
+requestAnimationFrame(loop);
+
+// ---------------- DONATE FUNCTIONALITY ----------------
+const donateModal=document.getElementById('donateModal');
+const closeDonate=document.getElementById('closeDonate');
+const qrContainer=document.getElementById('qrCode');
+const donateStatus=document.getElementById('donateStatus');
+const LIGHTNING_ADDRESS='jasonbohio@blink.sv';
+
+closeDonate.addEventListener('click',()=>{
+  donateModal.style.display='none';
+});
+
+donateModal.addEventListener('click',(e)=>{
+  if(e.target===donateModal)donateModal.style.display='none';
+});
+
+cv.addEventListener('mousemove',e=>{
+  const rect=cv.getBoundingClientRect();
+  const scaleX=W/rect.width;
+  const scaleY=(GH+HUD_H)/rect.height;
+  const cx=(e.clientX-rect.left)*scaleX;
+  const cy=(e.clientY-rect.top)*scaleY;
+  const dbX=W/2-60, dbY=GH+150, dbW=120, dbH=28;
+  const paY=gameOver&&gameOverHandled?(showShareBtn?GH/2+96:GH/2+55):-100;
+  const paX=W/2-110, paW=220;
+  const stackerX=W-105, stackerW=85;
+  const hover=gameOver&&gameOverHandled;
+  cv.style.cursor=(cx>=dbX&&cx<=dbX+dbW&&cy>=dbY&&cy<=dbY+dbH||cx>=paX&&cx<=paX+paW&&cy>=paY&&cy<=paY+38||cx>=stackerX&&cx<=stackerX+stackerW&&cy>=dbY&&cy<=dbY+dbH)?'pointer':'default';
+});
+</script>
+</body>
+</html>
